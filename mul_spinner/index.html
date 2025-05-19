@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplication Wheel Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+       * {
+         margin: 0;
+         padding: 0;
+         box-sizing: border-box;
+       }
+
+       body {
+         min-height: 100vh;
+         background-color: #f5f7ff;
+         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+       }
+
+       .game-container {
+         max-width: 1000px;
+         margin: 0 auto;
+         padding: 2rem;
+       }
+
+       .wheels-container {
+         display: flex;
+         flex-wrap: wrap;
+         justify-content: center;
+         gap: 2rem;
+         margin-bottom: 2rem;
+       }
+
+       .wheel-wrapper {
+         text-align: center;
+       }
+
+       .wheel-title {
+         font-weight: bold;
+         margin-bottom: 0.5rem;
+         color: #4f46e5;
+         font-size: 1.5rem;
+       }
+
+       .wheelOfFortune {
+         display: inline-block;
+         position: relative;
+         overflow: hidden;
+       }
+
+       .wheel {
+         display: block;
+       }
+
+       .spin-button {
+         font: 1.5em/0 sans-serif;
+         user-select: none;
+         cursor: pointer;
+         display: flex;
+         justify-content: center;
+         align-items: center;
+         position: absolute;
+         top: 50%;
+         left: 50%;
+         width: 30%;
+         height: 30%;
+         margin: -15%;
+         background: #fff;
+         color: #4f46e5;
+         box-shadow: 0 0 0 8px currentColor, 0 0px 15px 5px rgba(0, 0, 0, 0.6);
+         border-radius: 50%;
+         transition: 0.8s;
+       }
+
+       .spin-button::after {
+         content: '';
+         position: absolute;
+         top: -17px;
+         border: 10px solid transparent;
+         border-bottom-color: currentColor;
+         border-top: none;
+       }
+
+       .main-spin-button {
+         background-color: #4f46e5;
+         color: white;
+         font-weight: bold;
+         padding: 0.75rem 2rem;
+         border-radius: 0.5rem;
+         border: none;
+         cursor: pointer;
+         font-size: 1.25rem;
+         transition: all 0.3s ease;
+         margin: 1rem 0;
+       }
+
+       .main-spin-button:hover {
+         background-color: #4338ca;
+         transform: scale(1.05);
+       }
+
+       .main-spin-button:active {
+         transform: scale(0.95);
+       }
+
+       .question-container {
+         background-color: white;
+         border-radius: 1rem;
+         padding: 2rem;
+         margin-top: 2rem;
+         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+         text-align: center;
+         max-width: 500px;
+         margin: 0 auto;
+       }
+
+       .hidden {
+         display: none;
+       }
+
+       .question-text {
+         font-size: 1.5rem;
+         font-weight: bold;
+         margin-bottom: 1.5rem;
+         color: #1f2937;
+       }
+
+       .answer-input {
+         width: 100px;
+         padding: 0.5rem;
+         text-align: center;
+         font-size: 1.25rem;
+         border: 2px solid #d1d5db;
+         border-radius: 0.5rem;
+         margin-bottom: 1rem;
+       }
+
+       .answer-input:focus {
+         outline: none;
+         border-color: #4f46e5;
+       }
+
+       .check-button {
+         background-color: #10b981;
+         color: white;
+         font-weight: bold;
+         padding: 0.5rem 1.5rem;
+         border-radius: 0.5rem;
+         border: none;
+         cursor: pointer;
+         font-size: 1rem;
+         transition: all 0.3s ease;
+       }
+
+       .check-button:hover {
+         background-color: #059669;
+         transform: scale(1.05);
+       }
+
+       .check-button:active {
+         transform: scale(0.95);
+       }
+
+       .feedback {
+         margin-top: 1rem;
+         font-weight: 600;
+         font-size: 1.25rem;
+       }
+
+       .feedback-correct {
+         color: #10b981;
+       }
+
+       .feedback-incorrect {
+         color: #f59e0b;
+       }
+
+       @media (max-width: 768px) {
+         .wheels-container {
+           flex-direction: column;
+           align-items: center;
+         }
+       }
+    </style>
+</head>
+<body>
+  <div class="game-container">
+    <div class="text-center mb-8">
+      <h1 class="text-4xl font-bold text-indigo-700 mb-2">Multiplication Game</h1>
+    </div>
+
+    <div class="wheels-container">
+      <div class="wheel-wrapper">
+        <p class="wheel-title">Number of Groups</p>
+        <div class="wheelOfFortune" id="wheelOfFortune1">
+          <canvas class="wheel" id="wheel1" width="250" height="250"></canvas>
+          <div class="spin-button" id="spin1">?</div>
+        </div>
+      </div>
+
+      <div class="wheel-wrapper">
+        <p class="wheel-title">Number of each group</p>
+        <div class="wheelOfFortune" id="wheelOfFortune2">
+          <canvas class="wheel" id="wheel2" width="250" height="250"></canvas>
+          <div class="spin-button" id="spin2">?</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center">
+      <button id="main-spin-button" class="main-spin-button">SPIN</button>
+    </div>
+
+    <div id="question-container" class="question-container">
+      <p id="question-text" class="question-text">? groups of ? is ?</p>
+
+      <div>
+        <input type="number" id="answer-input" class="answer-input" placeholder="?">
+      </div>
+
+      <button id="check-button" class="check-button">
+        Check Answer
+      </button>
+
+      <p id="feedback" class="feedback hidden"></p>
+    </div>
+  </div>
+
+  <script>
+    // Create sectors with numbers 1-9 for both wheels
+    const sectors1 = [
+      { color: '#ef4444', label: '1' },
+      { color: '#f97316', label: '2' },
+      { color: '#f59e0b', label: '3' },
+      { color: '#84cc16', label: '4' },
+      { color: '#10b981', label: '5' },
+      { color: '#06b6d4', label: '6' },
+      { color: '#3b82f6', label: '7' },
+      { color: '#8b5cf6', label: '8' },
+      { color: '#ec4899', label: '9' }
+    ]
+
+    const sectors2 = [...sectors1]; // Same numbers for second wheel
+
+    // Animation and physics variables
+    const rand = (m, M) => Math.random() * (M - m) + m;
+    const PI = Math.PI;
+    const TAU = 2 * PI;
+    const friction = 0.985; // Controls how long the wheel spins
+
+    // Select DOM elements
+    const spinEl1 = document.querySelector('#spin1');
+    const spinEl2 = document.querySelector('#spin2');
+    const mainSpinButton = document.querySelector('#main-spin-button');
+    const questionContainer = document.querySelector('#question-container');
+    const questionText = document.querySelector('#question-text');
+    const answerInput = document.querySelector('#answer-input');
+    const checkButton = document.querySelector('#check-button');
+    const feedback = document.querySelector('#feedback');
+
+    // Wheel 1 variables
+    const ctx1 = document.querySelector('#wheel1').getContext('2d');
+    const wheel1 = {
+      ctx: ctx1,
+      dia: ctx1.canvas.width,
+      angVel: 0, // Angular velocity
+      ang: 0, // Angle in radians
+      sectors: sectors1,
+      currentValue: 0,
+      isSpinning: false
+    };
+
+    // Wheel 2 variables
+    const ctx2 = document.querySelector('#wheel2').getContext('2d');
+    const wheel2 = {
+      ctx: ctx2,
+      dia: ctx2.canvas.width,
+      angVel: 0,
+      ang: 0,
+      sectors: sectors2,
+      currentValue: 0,
+      isSpinning: false
+    };
+
+    // Initialize wheel properties
+    wheel1.rad = wheel1.dia / 2;
+    wheel1.arc = TAU / wheel1.sectors.length;
+    wheel2.rad = wheel2.dia / 2;
+    wheel2.arc = TAU / wheel2.sectors.length;
+
+    // Get the index (and thus value) of the wheel
+    function getIndex(wheel) {
+      const tot = wheel.sectors.length;
+      return Math.floor(tot - (wheel.ang / TAU) * tot) % tot;
+    }
+
+    // Draw a sector on the wheel
+    function drawSector(wheel, sector, i) {
+      const ang = wheel.arc * i;
+      const ctx = wheel.ctx;
+      const rad = wheel.rad;
+
+      ctx.save();
+      // COLOR
+      ctx.beginPath();
+      ctx.fillStyle = sector.color;
+      ctx.moveTo(rad, rad);
+      ctx.arc(rad, rad, rad, ang, ang + wheel.arc);
+      ctx.lineTo(rad, rad);
+      ctx.fill();
+
+      // TEXT
+      ctx.translate(rad, rad);
+      ctx.rotate(ang + wheel.arc / 2);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 30px sans-serif';
+      ctx.fillText(sector.label, rad - 30, 10);
+      ctx.restore();
+    }
+
+    // Rotate a wheel and update UI
+    function rotate(wheel, spinEl) {
+      const index = getIndex(wheel);
+      const sector = wheel.sectors[index];
+      wheel.currentValue = parseInt(sector.label);
+      wheel.ctx.canvas.style.transform = `rotate(${wheel.ang - PI / 2}rad)`;
+
+      if(!wheel.isSpinning) {
+        spinEl.style.background = 'white'
+      } else {
+        spinEl.textContent = sector.label
+        spinEl.style.background = sector.color
+      }
+    }
+
+    // Frame animation for both wheels
+    function frame() {
+      // Update wheel 1
+      if (wheel1.angVel) {
+        wheel1.angVel *= friction;
+        if (wheel1.angVel < 0.002) {
+          wheel1.angVel = 0;
+          wheel1.isSpinning = false;
+          checkBothWheelsStopped();
+        }
+        wheel1.ang += wheel1.angVel;
+        wheel1.ang %= TAU;
+        rotate(wheel1, spinEl1);
+      }
+
+      // Update wheel 2
+      if (wheel2.angVel) {
+        wheel2.angVel *= friction;
+        if (wheel2.angVel < 0.002) {
+          wheel2.angVel = 0;
+          wheel2.isSpinning = false;
+          checkBothWheelsStopped();
+        }
+        wheel2.ang += wheel2.angVel;
+        wheel2.ang %= TAU;
+        rotate(wheel2, spinEl2);
+      }
+
+      requestAnimationFrame(frame);
+    }
+
+    // Check if both wheels have stopped spinning
+    function checkBothWheelsStopped() {
+      if (!wheel1.isSpinning && !wheel2.isSpinning && (wheel1.angVel === 0 && wheel2.angVel === 0)) {
+        // Both wheels have stopped, update the question
+        setTimeout(() => {
+          mainSpinButton.disabled = false;
+          questionText.textContent = `${wheel1.currentValue} groups of ${wheel2.currentValue} is ?`;
+          answerInput.value = '';
+          answerInput.focus();
+          feedback.classList.add('hidden');
+        }, 500);
+      }
+    }
+
+    // Initialize the wheels
+    function initWheel(wheel, spinEl) {
+      wheel.sectors.forEach((sector, i) => drawSector(wheel, sector, i));
+      rotate(wheel, spinEl);
+    }
+
+    // Initialize both wheels
+    function init() {
+      initWheel(wheel1, spinEl1);
+      initWheel(wheel2, spinEl2);
+      frame(); // Start animation frame
+
+      // Main spin button event
+      mainSpinButton.addEventListener('click', () => {
+        if (!wheel1.isSpinning && !wheel2.isSpinning) {
+          // Reset UI
+          questionText.textContent = "? groups of ? is ?";
+          feedback.classList.add('hidden');
+          mainSpinButton.disabled = true;
+
+          // Spin both wheels with random velocities
+          wheel1.isSpinning = true;
+          wheel2.isSpinning = true;
+
+          // Different speeds and durations for dramatic effect
+          wheel1.angVel = rand(0.25, 0.40);
+          wheel2.angVel = rand(0.30, 0.45);
+        }
+      });
+
+      // Check answer event
+      checkButton.addEventListener('click', checkAnswer);
+      answerInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          checkAnswer();
+        }
+      });
+    }
+
+    // Check user's answer
+    function checkAnswer() {
+      const userAnswer = parseInt(answerInput.value);
+      if (isNaN(userAnswer)) {
+        feedback.textContent = 'Please enter a valid number';
+        feedback.className = 'feedback feedback-incorrect';
+        feedback.classList.remove('hidden');
+        return;
+      }
+
+      const correctAnswer = wheel1.currentValue * wheel2.currentValue;
+
+      feedback.classList.remove('hidden');
+
+      if (userAnswer === correctAnswer) {
+        feedback.textContent = '🎉 Correct! Well done!';
+        feedback.className = 'feedback feedback-correct';
+      } else {
+        if (userAnswer < correctAnswer) {
+          feedback.textContent = '📈 Try again! The answer should be bigger.';
+        } else {
+          feedback.textContent = '📉 Try again! The answer should be smaller.';
+        }
+        feedback.className = 'feedback feedback-incorrect';
+      }
+    }
+
+    // Start the game
+    init();
+  </script>
+</body>
+</html>

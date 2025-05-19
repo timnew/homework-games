@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Double Spinner Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://d3js.org/d3.v3.min.js"></script>
+  <style>
+    .spinner-container {
+      position: relative;
+      width: 260px;
+      height: 320px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .spinner-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    .spinner-arrow {
+      position: absolute;
+      left: 50%;
+      top: 10px;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+    .spin-btn {
+      margin-top: 240px;
+    }
+    .sentence {
+      min-height: 2.5rem;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen">
+  <div class="flex gap-12 mb-8">
+    <div class="spinner-container" id="spinner1-container">
+      <div id="spinner1"></div>
+      <button class="spin-btn px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition" id="spinBtn1">Spin</button>
+    </div>
+    <div class="spinner-container" id="spinner2-container">
+      <div id="spinner2"></div>
+      <button class="spin-btn px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition" id="spinBtn2">Spin</button>
+    </div>
+  </div>
+  <div class="sentence text-2xl mb-6" id="sentence"><b id="xVal">?</b> groups of <b id="yVal">?</b> is <b>z</b></div>
+  <div class="guess-section flex items-center gap-3 mb-4" id="guessSection" style="display:none;">
+    <label for="guessInput">z = </label>
+    <input type="number" id="guessInput" min="1" max="100" autocomplete="off" class="border rounded px-2 py-1 w-20" />
+    <button id="submitGuess" class="px-4 py-1 bg-blue-400 text-white rounded hover:bg-blue-600 transition">Submit</button>
+  </div>
+  <div class="feedback text-lg mb-2" id="feedback"></div>
+  <script>
+    // Spinner data and config
+    const NUMBERS = Array.from({length: 10}, (_, i) => ({ label: (i+1).toString(), value: 1, question: (i+1).toString() }));
+    const SPINNER_SIZE = 240;
+    const RADIUS = SPINNER_SIZE / 2 - 20;
+    const ARROW_HEIGHT = 32;
+    function createSpinner(targetId, onPick) {
+      const padding = { top: 20, right: 20, bottom: 20, left: 20 };
+      const w = SPINNER_SIZE, h = SPINNER_SIZE;
+      let rotation = 0, oldrotation = 0, picked = null;
+      const data = NUMBERS;
+      const color = d3.scale.category20();
+      const svg = d3.select(`#${targetId}`)
+        .append("svg")
+        .attr("width", w)
+        .attr("height", h)
+        .attr("class", "spinner-svg");
+      const container = svg.append("g")
+        .attr("class", "chartholder")
+        .attr("transform", `translate(${w/2},${h/2})`);
+      const vis = container.append("g");
+      const pie = d3.layout.pie().sort(null).value(() => 1);
+      const arc = d3.svg.arc().outerRadius(RADIUS);
+      const arcs = vis.selectAll("g.slice").data(pie(data)).enter().append("g").attr("class", "slice");
+      arcs.append("path")
+        .attr("fill", (d, i) => color(i))
+        .attr("d", arc);
+      arcs.append("text")
+        .attr("transform", function(d) {
+          d.innerRadius = 0;
+          d.outerRadius = RADIUS;
+          d.angle = (d.startAngle + d.endAngle) / 2;
+          const rotate = (d.angle * 180 / Math.PI - 90);
+          const tx = (RADIUS - 18) * Math.cos(d.angle - Math.PI/2);
+          const ty = (RADIUS - 18) * Math.sin(d.angle - Math.PI/2);
+          return `translate(${tx},${ty}) rotate(${-rotate})`;
+        })
+        .attr("text-anchor", "middle")
+        .attr("alignment-baseline", "middle")
+        .attr("font-size", "28px")
+        .attr("font-weight", "bold")
+        .attr("fill", "#222")
+        .text((d, i) => data[i].label);
+      // Arrow
+      svg.append("g")
+        .attr("transform", `translate(${w/2},${ARROW_HEIGHT/2})`)
+        .append("path")
+        .attr("d", `M-16,0L0,${ARROW_HEIGHT}L16,0Z`)
+        .style({ fill: "#2563eb" });
+      // Spin circle
+      container.append("circle")
+        .attr("cx", 0).attr("cy", 0).attr("r", 48)
+        .style({ fill: "white", cursor: "pointer" });
+      // Spin text
+      container.append("text")
+        .attr("x", 0).attr("y", 12)
+        .attr("text-anchor", "middle")
+        .text("SPIN")
+        .style({ "font-weight": "bold", "font-size": "24px", "pointer-events": "none" });
+      function spin() {
+        // Prevent spinning while animating
+        d3.select(`#spinBtn${targetId === 'spinner1' ? '1' : '2'}`).attr('disabled', true);
+        const ps = 360 / data.length;
+        const rng = Math.floor(Math.random() * 1440 + 360);
+        rotation = Math.round(rng / ps) * ps;
+        picked = Math.round(data.length - (rotation % 360) / ps);
+        picked = picked >= data.length ? picked % data.length : picked;
+        rotation += 90 - Math.round(ps / 2);
+        vis.transition()
+          .duration(2500)
+          .attrTween("transform", rotTween)
+          .each("end", function () {
+            oldrotation = rotation;
+            d3.select(`#spinBtn${targetId === 'spinner1' ? '1' : '2'}`).attr('disabled', null);
+            onPick(Number(data[picked].label));
+          });
+      }
+      function rotTween() {
+        const i = d3.interpolate(oldrotation % 360, rotation);
+        return function (t) {
+          return `rotate(${i(t)})`;
+        };
+      }
+      return spin;
+    }
+    // Game logic
+    let x = null, y = null, answer = null;
+    const xVal = document.getElementById('xVal');
+    const yVal = document.getElementById('yVal');
+    const guessSection = document.getElementById('guessSection');
+    const guessInput = document.getElementById('guessInput');
+    const submitGuess = document.getElementById('submitGuess');
+    const feedback = document.getElementById('feedback');
+    function resetGame() {
+      x = y = answer = null;
+      xVal.textContent = '?';
+      yVal.textContent = '?';
+      guessSection.style.display = 'none';
+      feedback.textContent = '';
+      guessInput.value = '';
+    }
+    function tryShowSentence() {
+      xVal.textContent = x !== null ? x : '?';
+      yVal.textContent = y !== null ? y : '?';
+      if (x !== null && y !== null) {
+        answer = x * y;
+        guessSection.style.display = 'flex';
+        feedback.textContent = '';
+        guessInput.value = '';
+        guessInput.focus();
+      }
+    }
+    // Spinner 1
+    const spin1 = createSpinner('spinner1', (picked) => {
+      x = picked;
+      tryShowSentence();
+    });
+    // Spinner 2
+    const spin2 = createSpinner('spinner2', (picked) => {
+      y = picked;
+      tryShowSentence();
+    });
+    document.getElementById('spinBtn1').onclick = spin1;
+    document.getElementById('spinBtn2').onclick = spin2;
+    // Guess logic
+    submitGuess.onclick = checkGuess;
+    guessInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') checkGuess();
+    });
+    function checkGuess() {
+      if (answer === null) return;
+      const val = parseInt(guessInput.value, 10);
+      if (isNaN(val)) {
+        feedback.textContent = 'Please enter a number!';
+        feedback.className = 'feedback text-red-500';
+        return;
+      }
+      if (val === answer) {
+        feedback.textContent = '🎉 Correct! Well done!';
+        feedback.className = 'feedback text-green-600';
+        guessSection.style.display = 'none';
+      } else if (val > answer) {
+        feedback.textContent = 'Too big! Try a smaller number.';
+        feedback.className = 'feedback text-red-500';
+      } else {
+        feedback.textContent = 'Too small! Try a bigger number.';
+        feedback.className = 'feedback text-red-500';
+      }
+    }
+    // On load
+    resetGame();
+  </script>
+</body>
+</html>
