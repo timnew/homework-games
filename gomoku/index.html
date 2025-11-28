@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Zen Gomoku</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              wood: {
+                100: '#f7e7ce',
+                200: '#deb887',
+                300: '#d2b48c',
+                400: '#bc8f8f',
+                500: '#8b4513',
+                600: '#cd853f',
+              },
+              stone: {
+                black: '#1a1a1a',
+                white: '#f5f5f5',
+              }
+            },
+            gridTemplateColumns: {
+              '15': 'repeat(15, minmax(0, 1fr))',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Custom wood grain effect */
+      .bg-wood-pattern {
+        background-color: #deb887;
+        background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.15'/%3E%3C/svg%3E");
+      }
+
+      @keyframes bounce-slow {
+        0%, 100% { transform: translate(-50%, 0); }
+        50% { transform: translate(-50%, -10px); }
+      }
+      .animate-bounce-slow {
+        animation: bounce-slow 2s infinite ease-in-out;
+      }
+    </style>
+    <!-- Babel for in-browser transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
+        "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+        "react": "https://aistudiocdn.com/react@^19.2.0",
+        "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+      }
+    }
+    </script>
+  </head>
+  <body class="bg-stone-100 text-gray-800 h-screen overflow-hidden">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useCallback, useEffect } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { Menu, RotateCcw, Home, BrainCircuit, User, X, Cpu, Trophy, Play } from 'lucide-react';
+      import { GoogleGenAI, Type } from '@google/genai';
+
+      // --- TYPES ---
+      const Player = {
+        None: 0,
+        Black: 1,
+        White: 2,
+      };
+
+      const GameMode = {
+        PvP: 'PvP',
+        PvComputer: 'PvComputer', // Offline
+        PvGemini: 'PvGemini',     // Online AI
+      };
+
+      const GameStatus = {
+        Playing: 'Playing',
+        Won: 'Won',
+        Draw: 'Draw',
+      };
+
+      // --- UTILS: GAME LOGIC ---
+      const BOARD_SIZE = 15;
+
+      const createEmptyBoard = () => {
+        return Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(Player.None));
+      };
+
+      const checkWin = (board, lastMove, player) => {
+        const { x, y } = lastMove;
+        const directions = [
+          { dx: 1, dy: 0 },  // Horizontal
+          { dx: 0, dy: 1 },  // Vertical
+          { dx: 1, dy: 1 },  // Diagonal \
+          { dx: 1, dy: -1 }, // Diagonal /
+        ];
+
+        for (const { dx, dy } of directions) {
+          const line = [{ x, y }];
+
+          // Check forward
+          let i = 1;
+          while (true) {
+            const nx = x + dx * i;
+            const ny = y + dy * i;
+            if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE || board[ny][nx] !== player) break;
+            line.push({ x: nx, y: ny });
+            i++;
+          }
+
+          // Check backward
+          i = 1;
+          while (true) {
+            const nx = x - dx * i;
+            const ny = y - dy * i;
+            if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE || board[ny][nx] !== player) break;
+            line.push({ x: nx, y: ny });
+            i++;
+          }
+
+          if (line.length >= 5) {
+            return { positions: line, direction: `${dx},${dy}` };
+          }
+        }
+
+        return null;
+      };
+
+      const isBoardFull = (board) => {
+        return board.every(row => row.every(cell => cell !== Player.None));
+      };
+
+      // --- Offline Computer Logic ---
+      const evaluatePosition = (board, x, y, player) => {
+        const directions = [
+          { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 1, dy: 1 }, { dx: 1, dy: -1 }
+        ];
+
+        let totalScore = 0;
+        const opponent = player === Player.Black ? Player.White : Player.Black;
+
+        // Prefer center (simple heuristic)
+        const center = Math.floor(BOARD_SIZE / 2);
+        const dist = Math.abs(x - center) + Math.abs(y - center);
+        totalScore += (30 - dist); // Minimal weight for center
+
+        for (const { dx, dy } of directions) {
+          // Analyze lines for Self (Attack) and Opponent (Defense)
+          totalScore += scoreLine(board, x, y, dx, dy, player, true);   // Attack
+          totalScore += scoreLine(board, x, y, dx, dy, opponent, false); // Defense
+        }
+
+        return totalScore;
+      };
+
+      const scoreLine = (board, x, y, dx, dy, checkPlayer, isAttack) => {
+        let count = 1;
+        let blockedEnds = 0;
+
+        // Check Forward
+        let i = 1;
+        while (true) {
+          const nx = x + dx * i;
+          const ny = y + dy * i;
+          if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) {
+            blockedEnds++;
+            break;
+          }
+          const cell = board[ny][nx];
+          if (cell === checkPlayer) {
+            count++;
+          } else if (cell !== Player.None) {
+            blockedEnds++;
+            break;
+          } else {
+            break;
+          }
+          i++;
+        }
+
+        // Check Backward
+        i = 1;
+        while (true) {
+          const nx = x - dx * i;
+          const ny = y - dy * i;
+          if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) {
+            blockedEnds++;
+            break;
+          }
+          const cell = board[ny][nx];
+          if (cell === checkPlayer) {
+            count++;
+          } else if (cell !== Player.None) {
+            blockedEnds++;
+            break;
+          } else {
+            break;
+          }
+          i++;
+        }
+
+        // Scoring weights
+        if (count >= 5) return 100000; // Win immediately
+        if (count === 4) {
+          if (blockedEnds === 0) return isAttack ? 50000 : 40000; // Open 4 (Unstoppable)
+          if (blockedEnds === 1) return isAttack ? 10000 : 20000; // Block 4 (Urgent)
+        }
+        if (count === 3) {
+          if (blockedEnds === 0) return isAttack ? 5000 : 8000; // Open 3 (Create threat)
+          if (blockedEnds === 1) return isAttack ? 100 : 100;
+        }
+        if (count === 2 && blockedEnds === 0) return 50;
+
+        return 0;
+      };
+
+      const getOfflineMove = (board, aiPlayer) => {
+        let bestScore = -1;
+        let bestMoves = [];
+
+        // Evaluate every empty cell
+        for (let y = 0; y < BOARD_SIZE; y++) {
+          for (let x = 0; x < BOARD_SIZE; x++) {
+            if (board[y][x] === Player.None) {
+              const score = evaluatePosition(board, x, y, aiPlayer);
+
+              if (score > bestScore) {
+                bestScore = score;
+                bestMoves = [{ x, y }];
+              } else if (score === bestScore) {
+                bestMoves.push({ x, y });
+              }
+            }
+          }
+        }
+
+        if (bestMoves.length === 0) {
+          return { x: -1, y: -1, reasoning: "Board Full" };
+        }
+
+        // Pick random best move
+        const move = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+
+        let reasoning = "Strategic placement.";
+        if (bestScore >= 100000) reasoning = "Finding a winning move!";
+        else if (bestScore >= 20000) reasoning = "Blocking opponent's winning line or securing a 4.";
+        else if (bestScore >= 5000) reasoning = "Building an open 3 or blocking a threat.";
+        else if (bestScore < 50) reasoning = "Early game positioning.";
+
+        return {
+          x: move.x,
+          y: move.y,
+          reasoning
+        };
+      };
+
+      // --- SERVICES: GEMINI ---
+      const getAiClient = () => {
+        // Fallback for safety in raw browser environment if process is undefined
+        const apiKey = (typeof process !== 'undefined' && process.env) ? process.env.API_KEY : '';
+        if (!apiKey) {
+          console.warn("API_KEY is not defined. AI moves will fail.");
+        }
+        return new GoogleGenAI({ apiKey });
+      };
+
+      const getAiMove = async (board, aiPlayer) => {
+        try {
+          const ai = getAiClient();
+          const modelId = "gemini-2.5-flash";
+
+          const boardString = JSON.stringify(board);
+          const playerColor = aiPlayer === Player.Black ? "Black (1)" : "White (2)";
+          const opponentColor = aiPlayer === Player.Black ? "White (2)" : "Black (1)";
+
+          const prompt = `
+            You are a Grandmaster Gomoku (Five-in-a-Row) player.
+            The board size is ${BOARD_SIZE}x${BOARD_SIZE}.
+            You are playing as ${playerColor}. Your opponent is ${opponentColor}.
+
+            Current Board State (2D Array, 0=Empty, 1=Black, 2=White):
+            ${boardString}
+
+            Rules:
+            1. Black plays first.
+            2. Connect exactly 5 stones in a row (horizontal, vertical, or diagonal) to win.
+            3. Block the opponent if they have 3 or 4 in a row.
+            4. Create open 3s and 4s to set up a win.
+
+            Task:
+            Analyze the board and determine the absolute best coordinate (x, y) for your next move.
+            x is the column index (0-${BOARD_SIZE - 1}), y is the row index (0-${BOARD_SIZE - 1}).
+            The chosen cell MUST be empty (0).
+
+            Return JSON format.
+          `;
+
+          const response = await ai.models.generateContent({
+            model: modelId,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  x: { type: Type.INTEGER, description: "Column index (0-14)" },
+                  y: { type: Type.INTEGER, description: "Row index (0-14)" },
+                  reasoning: { type: Type.STRING, description: "Short strategic reasoning for the move" }
+                },
+                required: ["x", "y", "reasoning"],
+              },
+            },
+          });
+
+          const text = response.text;
+          if (!text) throw new Error("Empty response from AI");
+
+          const result = JSON.parse(text);
+
+          // Validate move locally
+          if (
+              result.x < 0 ||
+              result.x >= BOARD_SIZE ||
+              result.y < 0 ||
+              result.y >= BOARD_SIZE ||
+              board[result.y][result.x] !== Player.None
+          ) {
+              console.warn("AI returned invalid move, using fallback:", result);
+              for(let y=0; y<BOARD_SIZE; y++) {
+                  for(let x=0; x<BOARD_SIZE; x++) {
+                      if(board[y][x] === Player.None) {
+                          return { x, y, reasoning: "Fallback move (AI invalid)" };
+                      }
+                  }
+              }
+          }
+
+          return result;
+
+        } catch (error) {
+          console.error("Gemini AI Error:", error);
+          const availableMoves = [];
+          for(let y=0; y<BOARD_SIZE; y++) {
+              for(let x=0; x<BOARD_SIZE; x++) {
+                  if(board[y][x] === Player.None) {
+                      availableMoves.push({ x, y, reasoning: "Random fallback (API Error)" });
+                  }
+              }
+          }
+          if (availableMoves.length > 0) {
+               return availableMoves[Math.floor(Math.random() * availableMoves.length)];
+          }
+          throw error;
+        }
+      };
+
+      // --- COMPONENT: CELL ---
+      const Cell = React.memo(({ x, y, value, onClick, lastMove, isWinningPiece, disabled }) => {
+        const isTop = y === 0;
+        const isBottom = y === 14;
+        const isLeft = x === 0;
+        const isRight = x === 14;
+
+        return (
+          <div
+            className={`relative flex items-center justify-center cursor-pointer select-none w-full h-full ${disabled ? 'cursor-default' : 'hover:bg-wood-300/30'}`}
+            onClick={() => !disabled && onClick({ x, y })}
+          >
+            {/* Horizontal Line */}
+            <div className={`absolute h-px bg-wood-500 w-full top-1/2 transform -translate-y-1/2 ${isLeft ? 'left-1/2 w-1/2' : ''} ${isRight ? 'right-1/2 w-1/2' : ''}`} />
+
+            {/* Vertical Line */}
+            <div className={`absolute w-px bg-wood-500 h-full left-1/2 transform -translate-x-1/2 ${isTop ? 'top-1/2 h-1/2' : ''} ${isBottom ? 'bottom-1/2 h-1/2' : ''}`} />
+
+            {/* Central Dot for 15x15 */}
+            { ((x === 3 || x === 11 || x === 7) && (y === 3 || y === 11 || y === 7)) && (
+               <div className="absolute w-1.5 h-1.5 bg-wood-500 rounded-full z-0" />
+            )}
+
+            {/* Stone */}
+            {value !== Player.None && (
+              <div
+                className={`
+                  relative z-10 w-[85%] h-[85%] rounded-full shadow-md transition-all duration-300 ease-out transform scale-95
+                  ${value === Player.Black
+                    ? 'bg-gradient-to-br from-stone-700 to-black'
+                    : 'bg-gradient-to-br from-white to-stone-300 border border-stone-200'}
+                  ${lastMove ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-transparent' : ''}
+                  ${isWinningPiece ? 'animate-pulse ring-4 ring-green-500 ring-offset-2 ring-offset-transparent' : ''}
+                `}
+              >
+                 <div className="absolute top-1 left-2 w-1/3 h-1/3 bg-white opacity-20 rounded-full filter blur-[1px]" />
+              </div>
+            )}
+          </div>
+        );
+      });
+
+      // --- COMPONENT: BOARD ---
+      const Board = ({ board, onCellClick, lastMove, winningLine, disabled }) => {
+        return (
+          <div
+            className="relative mx-auto bg-wood-200 rounded-lg shadow-2xl bg-wood-pattern border-[6px] border-wood-500 select-none flex items-center justify-center p-1 sm:p-3"
+            style={{
+              width: 'min(95vw, 70vh)',
+              height: 'min(95vw, 70vh)',
+            }}
+          >
+            <div className="grid grid-cols-15 gap-0 w-full h-full border border-wood-600">
+              {board.map((row, y) => (
+                row.map((cellValue, x) => {
+                   let isWinningPiece = false;
+                   if (winningLine) {
+                      isWinningPiece = winningLine.positions.some(p => p.x === x && p.y === y);
+                   }
+                   const isLastMove = lastMove?.x === x && lastMove?.y === y;
+                   return (
+                     <Cell
+                       key={`${x}-${y}`}
+                       x={x}
+                       y={y}
+                       value={cellValue}
+                       onClick={onCellClick}
+                       lastMove={isLastMove}
+                       isWinningPiece={isWinningPiece}
+                       disabled={disabled || cellValue !== Player.None}
+                     />
+                   );
+                })
+              ))}
+            </div>
+          </div>
+        );
+      };
+
+      // --- COMPONENT: CONTROLS (GAME HEADER) ---
+      const GameHeader = ({
+        gameMode,
+        status,
+        currentPlayer,
+        scores,
+        onRestart,
+        onGoHome
+      }) => {
+        const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+        const getModeIcon = () => {
+          switch(gameMode) {
+            case GameMode.PvGemini: return <BrainCircuit size={18} className="text-purple-600" />;
+            case GameMode.PvComputer: return <BrainCircuit size={18} className="text-blue-600" />;
+            case GameMode.PvP: return <User size={18} className="text-green-600" />;
+          }
+        };
+
+        const getModeName = () => {
+          switch(gameMode) {
+            case GameMode.PvGemini: return "Gemini AI";
+            case GameMode.PvComputer: return "Offline Bot";
+            case GameMode.PvP: return "PvP";
+          }
+        };
+
+        return (
+          <>
+            <div className="w-full bg-wood-100 border-b border-wood-300 px-4 py-3 shadow-sm flex items-center justify-between z-30">
+              <div className="flex items-center gap-2 bg-white/50 px-3 py-1.5 rounded-full border border-wood-200">
+                {getModeIcon()}
+                <span className="text-xs font-bold uppercase tracking-wider text-wood-600 hidden sm:block">{getModeName()}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className={`flex flex-col items-center ${currentPlayer === Player.Black && status === GameStatus.Playing ? 'opacity-100 scale-110' : 'opacity-60'} transition-all`}>
+                  <span className="text-xs font-bold text-stone-800">BLACK</span>
+                  <div className="bg-stone-800 text-white text-sm font-bold px-3 py-0.5 rounded-full">{scores[Player.Black]}</div>
+                </div>
+                <div className="text-wood-400 font-serif text-lg italic">vs</div>
+                <div className={`flex flex-col items-center ${currentPlayer === Player.White && status === GameStatus.Playing ? 'opacity-100 scale-110' : 'opacity-60'} transition-all`}>
+                   <span className="text-xs font-bold text-stone-600">WHITE</span>
+                   <div className="bg-white border border-stone-300 text-stone-800 text-sm font-bold px-3 py-0.5 rounded-full">{scores[Player.White]}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsMenuOpen(true)}
+                className="p-2 hover:bg-wood-200 rounded-full transition-colors text-wood-600"
+              >
+                <Menu size={24} />
+              </button>
+            </div>
+            {isMenuOpen && (
+              <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end">
+                <div className="h-full w-64 bg-stone-50 shadow-2xl p-6 flex flex-col gap-6 animate-in slide-in-from-right duration-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-xl font-serif font-bold text-wood-600">Game Menu</h2>
+                    <button onClick={() => setIsMenuOpen(false)} className="p-1 hover:bg-gray-200 rounded-full">
+                      <X size={24} />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => { onRestart(); setIsMenuOpen(false); }}
+                    className="flex items-center gap-3 w-full p-4 bg-white rounded-xl shadow-sm border border-gray-200 hover:bg-blue-50 hover:border-blue-200 transition-all group"
+                  >
+                    <div className="bg-blue-100 p-2 rounded-lg group-hover:bg-blue-200 text-blue-600">
+                      <RotateCcw size={20} />
+                    </div>
+                    <div className="flex flex-col items-start">
+                      <span className="font-bold text-gray-800">Restart Game</span>
+                      <span className="text-xs text-gray-500">Clear board, keep score</span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => { onGoHome(); setIsMenuOpen(false); }}
+                    className="flex items-center gap-3 w-full p-4 bg-white rounded-xl shadow-sm border border-gray-200 hover:bg-red-50 hover:border-red-200 transition-all group"
+                  >
+                    <div className="bg-red-100 p-2 rounded-lg group-hover:bg-red-200 text-red-600">
+                      <Home size={20} />
+                    </div>
+                    <div className="flex flex-col items-start">
+                      <span className="font-bold text-gray-800">Exit to Main Menu</span>
+                      <span className="text-xs text-gray-500">Reset score and change mode</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      };
+
+      // --- MAIN APP ---
+      const App = () => {
+        const [screen, setScreen] = useState('start');
+        const [gameMode, setGameMode] = useState(GameMode.PvGemini);
+        const [scores, setScores] = useState({ [Player.Black]: 0, [Player.White]: 0 });
+
+        const [board, setBoard] = useState(createEmptyBoard());
+        const [currentPlayer, setCurrentPlayer] = useState(Player.Black);
+        const [gameStatus, setGameStatus] = useState(GameStatus.Playing);
+        const [winningLine, setWinningLine] = useState(null);
+        const [lastMove, setLastMove] = useState(null);
+
+        const [aiThinking, setAiThinking] = useState(false);
+        const [aiReasoning, setAiReasoning] = useState("");
+
+        const COMPUTER_PLAYER = Player.White;
+
+        const handleRestartGame = useCallback(() => {
+          setBoard(createEmptyBoard());
+          setCurrentPlayer(Player.Black);
+          setGameStatus(GameStatus.Playing);
+          setWinningLine(null);
+          setLastMove(null);
+          setAiThinking(false);
+          setAiReasoning("");
+        }, []);
+
+        const handleGoHome = useCallback(() => {
+          setScreen('start');
+          setScores({ [Player.Black]: 0, [Player.White]: 0 });
+        }, []);
+
+        const handleStartPlaying = (mode) => {
+          setGameMode(mode);
+          setScreen('game');
+          handleRestartGame();
+        };
+
+        const processMove = async (pos) => {
+          if (gameStatus !== GameStatus.Playing) return;
+          if (board[pos.y][pos.x] !== Player.None) return;
+
+          const nextBoard = board.map(row => [...row]);
+          nextBoard[pos.y][pos.x] = currentPlayer;
+
+          setBoard(nextBoard);
+          setLastMove(pos);
+
+          const win = checkWin(nextBoard, pos, currentPlayer);
+          if (win) {
+            setGameStatus(GameStatus.Won);
+            setWinningLine(win);
+            setScores(prev => ({
+              ...prev,
+              [currentPlayer]: prev[currentPlayer] + 1
+            }));
+            return;
+          }
+
+          if (isBoardFull(nextBoard)) {
+            setGameStatus(GameStatus.Draw);
+            return;
+          }
+
+          const nextPlayer = currentPlayer === Player.Black ? Player.White : Player.Black;
+          setCurrentPlayer(nextPlayer);
+        };
+
+        useEffect(() => {
+          const triggerComputerMove = async () => {
+            const isComputerTurn = currentPlayer === COMPUTER_PLAYER;
+            const isComputerMode = gameMode === GameMode.PvGemini || gameMode === GameMode.PvComputer;
+
+            if (gameStatus === GameStatus.Playing && isComputerMode && isComputerTurn) {
+              setAiThinking(true);
+
+              await new Promise(resolve => setTimeout(resolve, 500));
+
+              try {
+                let move;
+                if (gameMode === GameMode.PvComputer) {
+                  move = getOfflineMove(board, COMPUTER_PLAYER);
+                } else {
+                  move = await getAiMove(board, COMPUTER_PLAYER);
+                }
+
+                setAiReasoning(move.reasoning || "");
+                await processMove({ x: move.x, y: move.y });
+              } catch (error) {
+                console.error("Computer Move Error", error);
+              } finally {
+                setAiThinking(false);
+              }
+            }
+          };
+
+          triggerComputerMove();
+        }, [currentPlayer, gameMode, gameStatus, board]);
+
+        if (screen === 'start') {
+          return (
+            <div className="min-h-screen bg-wood-100 flex items-center justify-center p-4 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')]">
+              <div className="max-w-md w-full bg-white/90 backdrop-blur rounded-2xl shadow-2xl overflow-hidden border border-wood-300">
+                <div className="bg-wood-600 p-8 text-center">
+                   <h1 className="text-4xl font-serif font-bold text-wood-100 mb-2">Zen Gomoku</h1>
+                   <p className="text-wood-200 opacity-80">Five-in-a-Row Strategy</p>
+                </div>
+                <div className="p-6 flex flex-col gap-4">
+                  <button
+                    onClick={() => handleStartPlaying(GameMode.PvGemini)}
+                    className="group flex items-center p-4 rounded-xl border-2 border-purple-100 hover:border-purple-400 bg-purple-50 hover:bg-purple-100 transition-all"
+                  >
+                    <div className="bg-purple-200 p-3 rounded-full text-purple-700 group-hover:scale-110 transition-transform">
+                      <BrainCircuit size={24} />
+                    </div>
+                    <div className="ml-4 text-left">
+                      <h3 className="font-bold text-purple-900">VS Gemini AI</h3>
+                      <p className="text-sm text-purple-700 opacity-70">Powered by Google Gemini. Smart & Creative.</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleStartPlaying(GameMode.PvComputer)}
+                    className="group flex items-center p-4 rounded-xl border-2 border-blue-100 hover:border-blue-400 bg-blue-50 hover:bg-blue-100 transition-all"
+                  >
+                    <div className="bg-blue-200 p-3 rounded-full text-blue-700 group-hover:scale-110 transition-transform">
+                      <Cpu size={24} />
+                    </div>
+                    <div className="ml-4 text-left">
+                      <h3 className="font-bold text-blue-900">VS Computer</h3>
+                      <p className="text-sm text-blue-700 opacity-70">Offline mode. Fast & Classic logic.</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleStartPlaying(GameMode.PvP)}
+                    className="group flex items-center p-4 rounded-xl border-2 border-green-100 hover:border-green-400 bg-green-50 hover:bg-green-100 transition-all"
+                  >
+                    <div className="bg-green-200 p-3 rounded-full text-green-700 group-hover:scale-110 transition-transform">
+                      <User size={24} />
+                    </div>
+                    <div className="ml-4 text-left">
+                      <h3 className="font-bold text-green-900">Pass & Play</h3>
+                      <p className="text-sm text-green-700 opacity-70">Play against a friend on this device.</p>
+                    </div>
+                  </button>
+                </div>
+                <div className="bg-stone-50 p-4 text-center text-xs text-stone-400 border-t border-stone-200">
+                  Connect 5 stones to win • Black moves first
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className="h-screen flex flex-col bg-stone-100 overflow-hidden">
+            <GameHeader
+              gameMode={gameMode}
+              status={gameStatus}
+              currentPlayer={currentPlayer}
+              scores={scores}
+              onRestart={handleRestartGame}
+              onGoHome={handleGoHome}
+            />
+            <div className="flex-1 flex flex-col items-center justify-center w-full relative p-2 sm:p-4">
+              {gameStatus !== GameStatus.Playing && (
+                 <div className="absolute top-8 left-1/2 transform -translate-x-1/2 z-20 animate-bounce-slow">
+                    <div className="bg-white/95 backdrop-blur px-8 py-3 rounded-full shadow-xl border-2 border-wood-400 flex items-center gap-3">
+                      <Trophy className="text-yellow-500" size={24} fill="currentColor" />
+                      <span className="font-bold text-xl text-wood-800">
+                        {gameStatus === GameStatus.Draw
+                          ? "It's a Draw!"
+                          : `${currentPlayer === Player.Black ? 'Black' : 'White'} Wins!`}
+                      </span>
+                    </div>
+                 </div>
+              )}
+
+              <Board
+                board={board}
+                onCellClick={(pos) => processMove(pos)}
+                lastMove={lastMove}
+                winningLine={winningLine}
+                disabled={gameStatus !== GameStatus.Playing || ((gameMode === GameMode.PvGemini || gameMode === GameMode.PvComputer) && currentPlayer === COMPUTER_PLAYER)}
+              />
+
+              <div className="w-full max-w-[95vw] mt-4 min-h-[60px] flex justify-center">
+                {aiThinking ? (
+                   <div className="flex items-center gap-2 text-wood-600 bg-wood-100/80 px-4 py-2 rounded-full animate-pulse">
+                     <Cpu size={16} className="animate-spin" />
+                     <span className="text-sm font-medium">Opponent is thinking...</span>
+                   </div>
+                ) : (
+                   aiReasoning && (gameMode === GameMode.PvGemini || gameMode === GameMode.PvComputer) && lastMove && currentPlayer === Player.Black && (
+                     <div className="bg-white/80 backdrop-blur border-l-4 border-wood-400 px-4 py-2 rounded shadow-sm max-w-2xl text-sm text-stone-600">
+                       <span className="font-bold text-wood-700 block text-xs uppercase tracking-wider mb-1">Opponent Thought:</span>
+                       "{aiReasoning}"
+                     </div>
+                   )
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- MOUNT ---
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+      const root = createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+    </script>
+  </body>
+</html>
