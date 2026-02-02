@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Number Hive: Fixed Coordinates</title>
+    <style>
+        :root { --blue: #3498db; --red: #e74c3c; --highlight: #f1c40f; --bg: #fdfdfd; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; flex-direction: column; align-items: center; background: #e0e5ec; margin: 0; padding: 20px; color: #333; }
+        #game-container { background: var(--bg); padding: 30px; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.1); text-align: center; max-width: 650px; width: 100%; }
+        canvas { display: block; margin: 0 auto; cursor: pointer; max-width: 100%; height: auto; }
+        .status { margin-bottom: 10px; font-weight: 800; font-size: 1.5rem; height: 30px; color: #2c3e50; }
+        .controls { margin-top: 20px; display: flex; gap: 15px; justify-content: center; }
+        button { padding: 12px 25px; font-weight: 700; cursor: pointer; border-radius: 8px; border: none; background: #34495e; color: white; transition: 0.2s; font-size: 1rem; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        .error-msg { color: #c0392b; font-size: 0.9rem; margin-top: 5px; height: 20px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="status" id="status">Select Starting Player</div>
+    <div class="error-msg" id="errorMsg"></div>
+    <canvas id="gameCanvas" width="600" height="850"></canvas>
+    <div class="controls">
+        <button onclick="startGame('user')" style="background: var(--blue)">I Start</button>
+        <button onclick="startGame('ai')" style="background: var(--red)">AI Starts</button>
+        <button onclick="resetGame()" style="background:#95a5a6">Reset</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const statusDisplay = document.getElementById('status');
+const errorDisplay = document.getElementById('errorMsg');
+
+// Configuration based strictly on user diagram
+// startCol indicates the 'q' index of the first item in that row
+const rowConfig = [
+    { r: 0, startCol: 0, vals: [18, 6, 13] },
+    { r: 1, startCol: 0, vals: [14, 7, 22, 12] },
+    { r: 2, startCol: 0, vals: [23, 21, 2, 4, 6] },
+    { r: 3, startCol: 0, vals: [15, 14, 3, 18, 17, 8] },
+    { r: 4, startCol: 0, vals: [4, 8, 5, 16, 13, 19, 11] },
+    { r: 5, startCol: 0, vals: [23, 7, 17, 20, 24, 9, 12, 5] },
+    { r: 6, startCol: 1, vals: [9, 20, 3, 10, 21, 2, 11] }, // Starts at q=1
+    { r: 7, startCol: 2, vals: [19, 10, 24, 16, 22, 15] }   // Starts at q=2
+];
+
+let hexes = [];
+let selL = null, selR = null, currentPlayer = null, gameOver = false, turnCount = 0, pendingSum = null;
+let winningLine = [];
+
+const RADIUS = 34;
+const HEX_W = Math.sqrt(3) * RADIUS; // ~58.8
+const HEX_H = 2 * RADIUS; // 68
+
+function init() {
+    hexes = [];
+    winningLine = [];
+
+    // We center the grid roughly
+    const centerX = canvas.width / 2;
+    const startY = 80;
+
+    rowConfig.forEach(config => {
+        config.vals.forEach((val, i) => {
+            let q = config.startCol + i;
+            let r = config.r;
+
+            // X Calculation: q shifts right, r shifts left (to create the slope)
+            // x = (q * HEX_W) - (r * HEX_W / 2)
+            // We add an offset to center it on screen
+            let x = centerX + (q * HEX_W) - (r * HEX_W / 2);
+            // We adjust row 6 and 7 centering slightly because of their missing left-nodes logic
+            // Actually, the math handles it if q is correct.
+            // Let's re-center based on row width 4 (middle row)
+            x -= (HEX_W * 1.5);
+
+            let y = startY + r * (HEX_H * 0.75);
+
+            hexes.push({ val, r, q, x, y, owner: null });
+        });
+    });
+}
+
+function checkWin(p) {
+    // 1. Same R (Horizontal): q + 1
+    // 2. Same Q (Diag \): r + 1
+    // 3. Offset (Diag /): r + 1, q + 1
+    const directions = [
+        { dr: 0, dq: 1 }, // Horizontal
+        { dr: 1, dq: 0 }, // Vertical-ish (Left Diag)
+        { dr: 1, dq: 1 }  // Right Diag
+    ];
+
+    for (let h of hexes) {
+        if (h.owner !== p) continue;
+        for (let d of directions) {
+            let line = [h];
+            for (let i = 1; i < 4; i++) {
+                let target = hexes.find(n => n.r === h.r + d.dr*i && n.q === h.q + d.dq*i && n.owner === p);
+                if (target) line.push(target); else break;
+            }
+            if (line.length >= 4) return line;
+        }
+    }
+    return null;
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Hexes
+    hexes.forEach(h => {
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            let angle = (Math.PI / 3) * i - (Math.PI / 6);
+            ctx.lineTo(h.x + RADIUS * Math.cos(angle), h.y + RADIUS * Math.sin(angle));
+        }
+        ctx.closePath();
+
+        const isWin = winningLine.includes(h);
+
+        // Fill
+        if (pendingSum && h.val === pendingSum && !h.owner) ctx.fillStyle = '#f1c40f'; // Gold highlight
+        else if (h.owner === 'user') ctx.fillStyle = isWin ? '#2980b9' : '#3498db';
+        else if (h.owner === 'ai') ctx.fillStyle = isWin ? '#c0392b' : '#e74c3c';
+        else ctx.fillStyle = '#fff';
+
+        ctx.fill();
+
+        // Stroke
+        ctx.strokeStyle = isWin ? '#2ecc71' : '#bdc3c7';
+        ctx.lineWidth = isWin ? 5 : 2;
+        ctx.stroke();
+
+        // Text
+        ctx.fillStyle = h.owner ? '#fff' : '#2c3e50';
+        ctx.font = isWin ? "bold 20px Arial" : "bold 16px Arial";
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(h.val, h.x, h.y);
+
+        // Debug Coordinates (Optional - Uncomment to verify)
+        // ctx.font = "10px Arial"; ctx.fillStyle="#999"; ctx.fillText(`${h.r},${h.q}`, h.x, h.y+15);
+    });
+
+    drawBoard(70, 680, selL, "BOARD A");
+    drawBoard(350, 680, selR, "BOARD B");
+
+    ctx.fillStyle = "#bdc3c7"; ctx.font = "30px Arial"; ctx.fillText("+", 310, 720);
+}
+
+function drawBoard(x, y, sel, label) {
+    ctx.fillStyle = "#7f8c8d"; ctx.font = "bold 14px Arial"; ctx.textAlign = "left";
+    ctx.fillText(label, x, y - 10);
+    for(let i=0; i<12; i++) {
+        let bx = x + (i%4)*45, by = y + Math.floor(i/4)*45;
+        ctx.fillStyle = (i+1 === sel) ? "#27ae60" : "#ecf0f1";
+        ctx.beginPath(); ctx.roundRect(bx, by, 40, 40, 6); ctx.fill();
+        ctx.fillStyle = (i+1 === sel) ? "#fff" : "#2c3e50";
+        ctx.textAlign = "center"; ctx.textBaseline = 'middle'; ctx.font = "bold 16px Arial";
+        ctx.fillText(i+1, bx+20, by+20);
+    }
+}
+
+function startGame(p) { resetGame(); currentPlayer = p; statusDisplay.innerText = p==='user' ? "Your Turn" : "AI Thinking..."; if(p==='ai') setTimeout(aiTurn, 800); }
+function resetGame() { init(); selL=null; selR=null; gameOver=false; turnCount=0; pendingSum=null; winningLine=[]; errorDisplay.innerText=""; statusDisplay.innerText="Select Player"; draw(); }
+
+canvas.onclick = (e) => {
+    if (gameOver || currentPlayer !== 'user') return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
+
+    // Handle Hex Click (for duplicate resolution)
+    if (pendingSum) {
+        let clicked = hexes.find(h => Math.hypot(h.x-mx, h.y-my) < RADIUS && h.val === pendingSum && !h.owner);
+        if (clicked) {
+            clicked.owner = 'user';
+            pendingSum = null;
+            errorDisplay.innerText = "";
+            finishTurn();
+        }
+        return;
+    }
+
+    // Handle Board Clicks
+    let hitL = checkBoard(mx, my, 70, 680);
+    let hitR = checkBoard(mx, my, 350, 680);
+
+    if (hitL) {
+        if (turnCount === 0 || selR) {
+            selL = hitL;
+            tryMove();
+        } else {
+            errorDisplay.innerText = "You can only change ONE number!";
+        }
+    } else if (hitR) {
+        if (turnCount === 0 || selL) {
+            selR = hitR;
+            tryMove();
+        } else {
+             errorDisplay.innerText = "You can only change ONE number!";
+        }
+    }
+    draw();
+};
+
+function checkBoard(mx, my, x, y) {
+    for(let i=0; i<12; i++) {
+        let bx = x + (i%4)*45, by = y + Math.floor(i/4)*45;
+        if (mx > bx && mx < bx+40 && my > by && my < by+40) return i+1;
+    }
+    return null;
+}
+
+function tryMove() {
+    if (!selL || !selR) return;
+    errorDisplay.innerText = "";
+
+    let sum = selL + selR;
+    let available = hexes.filter(h => h.val === sum && !h.owner);
+
+    if (available.length === 0) {
+        // INVALID MOVE: Revert selection if it wasn't turn 0
+        errorDisplay.innerText = `Sum ${sum} is not available! Invalid move.`;
+        // We don't change turns, user must pick a different number
+        return;
+    }
+
+    if (available.length === 1) {
+        available[0].owner = 'user';
+        finishTurn();
+    } else {
+        pendingSum = sum;
+        errorDisplay.innerText = "Multiple options! Click the Hive to select one.";
+    }
+}
+
+function finishTurn() {
+    let win = checkWin(currentPlayer);
+    if (win) {
+        winningLine = win;
+        gameOver = true;
+        statusDisplay.innerText = currentPlayer === 'user' ? "YOU WIN!" : "AI WINS!";
+    } else {
+        turnCount++;
+        currentPlayer = currentPlayer === 'user' ? 'ai' : 'user';
+        statusDisplay.innerText = currentPlayer === 'user' ? "Your Turn" : "AI Thinking...";
+        if (currentPlayer === 'ai') setTimeout(aiTurn, 600);
+    }
+    draw();
+}
+
+function aiTurn() {
+    let moves = [];
+    // Generate valid moves
+    if (turnCount === 0) {
+        for(let l=1; l<=12; l++) for(let r=1; r<=12; r++) moves.push({l, r});
+    } else {
+        for(let i=1; i<=12; i++) {
+            if(i !== selL) moves.push({l: i, r: selR});
+            if(i !== selR) moves.push({l: selL, r: i});
+        }
+    }
+
+    let best = null, maxScore = -9999;
+
+    moves.forEach(m => {
+        let s = m.l + m.r;
+        let targets = hexes.filter(h => h.val === s && !h.owner);
+
+        targets.forEach(h => {
+            // Scoring:
+            // 1. Can AI win? (Huge points)
+            // 2. Can User win next? (Block them - High points)
+            // 3. Extend lines
+
+            let aiScore = evaluateHex(h, 'ai');
+            let userScore = evaluateHex(h, 'user');
+
+            // If this move wins, score is massive
+            let score = aiScore;
+            // If this move blocks user from winning, adds massive points
+            if (userScore >= 1000) score += 5000;
+
+            score += userScore; // General blocking value
+
+            if (score > maxScore) {
+                maxScore = score;
+                best = { l: m.l, r: m.r, hex: h };
+            }
+        });
+    });
+
+    if (best) {
+        selL = best.l;
+        selR = best.r;
+        best.hex.owner = 'ai';
+        finishTurn();
+    } else {
+        // No moves possible (rare)
+        errorDisplay.innerText = "AI has no moves!";
+    }
+}
+
+function evaluateHex(h, p) {
+    let score = 0;
+    const dirs = [{dr:0,dq:1}, {dr:1,dq:0}, {dr:1,dq:1}];
+
+    dirs.forEach(d => {
+        let count = 1;
+        // Look Forward
+        for(let i=1; i<4; i++) {
+            if(hexes.find(n => n.r === h.r+d.dr*i && n.q === h.q+d.dq*i && n.owner === p)) count++;
+            else break;
+        }
+        // Look Backward
+        for(let i=1; i<4; i++) {
+            if(hexes.find(n => n.r === h.r-d.dr*i && n.q === h.q-d.dq*i && n.owner === p)) count++;
+            else break;
+        }
+
+        if (count >= 4) score += 10000;
+        else if (count === 3) score += 100;
+        else if (count === 2) score += 10;
+    });
+    return score;
+}
+
+init();
+draw();
+</script>
+</body>
+</html>
